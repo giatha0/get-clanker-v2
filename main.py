@@ -155,10 +155,9 @@ def handle_message(update: Update, context: CallbackContext):
             fid = decoded_args.get("_fid") or decoded_args.get("fid")
             image = decoded_args.get("_image") or decoded_args.get("image")
             deployer = decoded_args.get("_deployer") or decoded_args.get("deployer")
-            # Không cần context hiển thị cho revealcam (hoặc bạn có thể thêm nếu muốn)
-            
+
             reply = (
-                f"*Token revealcam Information:*\n\n"
+                "*Token revealcam Information:*\n\n"
                 f"*From:* `{display_from}`\n"
                 f"*Name:* `{name}`\n"
                 f"*Symbol:* `{symbol}`\n"
@@ -166,17 +165,17 @@ def handle_message(update: Update, context: CallbackContext):
                 f"*Image:* [Link]({image})\n\n"
                 f"*Deployer:* `{deployer}`"
             )
-
-        else:  # abi clanker
+        else:
+            # abi clanker
             name = decoded_args.get("name")
             symbol = decoded_args.get("symbol")
             if symbol and not symbol.startswith("$"):
                 symbol = f"${symbol}"
-            image = decoded_args.get("image") or None  # Nếu có trường image
-            context_raw = decoded_args.get("context") or ""  # Hoặc trường tương tự
+            image = decoded_args.get("image") or None
+            context_raw = decoded_args.get("context") or ""
             creator_reward_recipient = decoded_args.get("creatorRewardRecipient") or None
 
-            # Xử lý context hiển thị
+            # Xử lý context hiển thị dạng key: value từng dòng
             try:
                 context_json = json.loads(context_raw)
                 context_lines = []
@@ -196,7 +195,7 @@ def handle_message(update: Update, context: CallbackContext):
                 context_formatted = context_raw
 
             reply = (
-                f"*Token Clanker Information:*\n\n"
+                "*Token Deployment Information:*\n\n"
                 f"*From:* `{display_from}`\n"
                 f"*Name:* `{name}`\n"
                 f"*Symbol:* `{symbol}`\n"
