@@ -31,7 +31,7 @@ dp = Dispatcher(bot, None, use_context=True)
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URL))
 
 try:
-    with open("abi.json", "r") as f:
+    with open("abi_clanker.json", "r") as f:
         abi_clanker = json.load(f)
     contract_clanker = w3.eth.contract(abi=abi_clanker)
     logger.info("✅ Clanker ABI loaded successfully.")
