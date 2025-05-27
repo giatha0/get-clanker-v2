@@ -5,10 +5,10 @@ import logging
 import requests
 
 from flask import Flask, request, jsonify
-from telegram import Bot, Update, ParseMode
+from telegram import Bot, Update
+from telegram.constants import ParseMode
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 from web3 import Web3
-from web3.exceptions import MismatchedABI
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -16,7 +16,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Giữ nguyên các biến môi trường quan trọng ===
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 API_BASESCAN = os.environ.get("API_BASESCAN")  # e.g. "https://api.basescan.org"
 BASESCAN_API_KEY = os.environ.get("BASESCAN_API_KEY")
@@ -32,21 +31,26 @@ dp = Dispatcher(bot, None, use_context=True)
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URL))
 
-# --- Load cả 2 ABI: Clanker (cũ) và Revealcam (mới) ---
 try:
-    with open("abi_clanker.json", "r") as f:
+    with open("abi.json", "r") as f:
         abi_clanker = json.load(f)
-    with open("abi_revealcam.json", "r") as f:
-        abi_revealcam = json.load(f)
-    logger.info("✅ Loaded both ABIs successfully.")
+    contract_clanker = w3.eth.contract(abi=abi_clanker)
+    logger.info("✅ Clanker ABI loaded successfully.")
 except Exception as e:
-    logger.error(f"❌ Error loading ABI files: {e}")
+    logger.error(f"❌ Error loading Clanker ABI: {e}")
     exit(1)
 
-contract_clanker = w3.eth.contract(abi=abi_clanker)
-contract_revealcam = w3.eth.contract(abi=abi_revealcam)
+try:
+    with open("abi_revealcam.json", "r") as f:
+        abi_revealcam = json.load(f)
+    contract_revealcam = w3.eth.contract(abi=abi_revealcam)
+    logger.info("✅ Revealcam ABI loaded successfully.")
+except Exception as e:
+    logger.error(f"❌ Error loading Revealcam ABI: {e}")
+    exit(1)
 
-# --- Address labels ---
+app = Flask(__name__)
+
 ADDRESS_LABELS = {
     "0x2112b8456ac07c15fa31ddf3bf713e77716ff3f9": "bnkr deployer",
     "0xd9acd656a5f1b519c9e76a2a6092265a74186e58": "clanker interface"
@@ -93,18 +97,25 @@ def get_transaction_data(txhash: str) -> dict:
         logger.error(f"❌ Error fetching transaction data: {e}")
         return {}
 
-# --- Hàm thử decode với ABI từng contract, trả về tên ABI và args nếu thành công ---
-def decode_input_try_all(input_hex: str):
-    for name, contract in [("revealcam", contract_revealcam), ("clanker", contract_clanker)]:
-        try:
-            func_obj, func_args = contract.decode_function_input(input_hex)
-            if func_obj.fn_name == "deployToken":
-                logger.info(f"Decoded input with {name} ABI.")
-                return name, func_args
-        except Exception:
-            continue
-    logger.warning("Failed to decode input with all known ABIs.")
-    return None, None
+def decode_input_with_web3(input_hex: str):
+    try:
+        logger.info("🔓 Decoding input data with Clanker ABI...")
+        func_obj, func_args = contract_clanker.decode_function_input(input_hex)
+        logger.info(f"✅ Decoded function: {func_obj.fn_name}")
+        return {"function": func_obj.fn_name, "args": func_args}
+    except Exception as e:
+        logger.error(f"❌ Error decoding input with Clanker ABI: {e}")
+        return None
+
+def decode_input_with_web3_revealcam(input_hex: str):
+    try:
+        logger.info("🔓 Decoding input data with Revealcam ABI...")
+        func_obj, func_args = contract_revealcam.decode_function_input(input_hex)
+        logger.info(f"✅ Decoded function: {func_obj.fn_name}")
+        return {"function": func_obj.fn_name, "args": func_args}
+    except Exception as e:
+        logger.error(f"❌ Error decoding input with Revealcam ABI: {e}")
+        return None
 
 def handle_message(update: Update, context: CallbackContext):
     try:
@@ -132,10 +143,7 @@ def handle_message(update: Update, context: CallbackContext):
             return
 
         label = ADDRESS_LABELS.get(from_address.lower())
-        if label:
-            display_from = f"{label} ({from_address})"
-        else:
-            display_from = from_address
+        display_from = f"{label} ({from_address})" if label else from_address
 
         input_data_raw = tx_data.get("input", "")
         if not input_data_raw:
@@ -144,34 +152,19 @@ def handle_message(update: Update, context: CallbackContext):
 
         logger.info(f"🔍 Input data raw (first 20 chars): {input_data_raw[:20]}... (length: {len(input_data_raw)})")
 
-        # Thử decode với cả 2 ABI
-        # decode với clanker trước
-        decoded = decode_input_with_web3(input_data_raw)  # cũ, dùng ABI clanker
+        decoded = decode_input_with_web3(input_data_raw)
 
-        # Nếu decode lỗi hoặc function không phải deployToken, thử decode revealcam (ABI mới)
+        abi_used = "clanker"
         if not decoded or decoded.get("function") != "deployToken":
-            # Decode với ABI revealcam
-            try:
-                with open("abi_revealcam.json", "r") as f:
-                    abi_revealcam = json.load(f)
-                contract_revealcam = w3.eth.contract(abi=abi_revealcam)
-                func_obj, func_args = contract_revealcam.decode_function_input(input_data_raw)
-                if func_obj.fn_name == "deployToken":
-                    decoded = {"function": func_obj.fn_name, "args": func_args}
-                    abi_used = "revealcam"
-                else:
-                    decoded = None
-            except Exception as e:
-                logger.warning(f"Failed decode revealcam ABI: {e}")
-                decoded = None
-        else:
-            abi_used = "clanker"
+            # thử với revealcam
+            decoded_rc = decode_input_with_web3_revealcam(input_data_raw)
+            if decoded_rc and decoded_rc.get("function") == "deployToken":
+                decoded = decoded_rc
+                abi_used = "revealcam"
+            else:
+                update.message.reply_text("Error decoding input data with known ABIs.")
+                return
 
-        if not decoded:
-            update.message.reply_text("Error decoding input data.")
-            return
-
-        # Xử lý theo ABI dùng để decode
         if abi_used == "revealcam":
             args = decoded.get("args", {})
             name = args.get("_name") or args.get("name")
@@ -191,7 +184,7 @@ def handle_message(update: Update, context: CallbackContext):
                 f"*Image:* [Link]({image})\n\n"
                 f"*Deployer:* `{deployer}`"
             )
-        else:  # clanker
+        else:
             args = decoded.get("args", {}).get("deploymentConfig", {})
             token_config = args.get("tokenConfig", {})
             rewards_config = args.get("rewardsConfig", {})
@@ -236,6 +229,7 @@ def handle_message(update: Update, context: CallbackContext):
 
         update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         logger.info("✅ Bot has responded successfully.")
+
     except Exception as e:
         logger.exception(f"❌ Unhandled error in handle_message: {e}")
 
@@ -244,8 +238,6 @@ def start_command(update: Update, context: CallbackContext):
 
 dp.add_handler(CommandHandler("start", start_command))
 dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
-app = Flask(__name__)
 
 @app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
