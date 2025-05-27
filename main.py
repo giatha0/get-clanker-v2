@@ -113,13 +113,12 @@ def handle_message(update: Update, context: CallbackContext):
 
         if not re.match(r"^0x[a-fA-F0-9]{40}$", msg_text):
             logger.warning("⚠️ Message is not a valid contract address.")
-            update.message.reply_text("⚠️ Please send a valid contract address (0x...).")
             return
 
         update.message.reply_text(f"Processing contract: `{msg_text}`", parse_mode=ParseMode.MARKDOWN)
         txhash = get_creation_txhash(msg_text)
         if not txhash:
-            update.message.reply_text("Could not find creation txhash from BaseScan.")
+            update.message.reply_text("Could not find txhash from BaseScan.")
             return
 
         tx_data = get_transaction_data(txhash)
@@ -133,7 +132,10 @@ def handle_message(update: Update, context: CallbackContext):
             return
 
         label = ADDRESS_LABELS.get(from_address.lower())
-        display_from = f"{label} ({from_address})" if label else from_address
+        if label:
+            display_from = f"{label} ({from_address})"
+        else:
+            display_from = from_address
 
         input_data_raw = tx_data.get("input", "")
         if not input_data_raw:
@@ -142,19 +144,43 @@ def handle_message(update: Update, context: CallbackContext):
 
         logger.info(f"🔍 Input data raw (first 20 chars): {input_data_raw[:20]}... (length: {len(input_data_raw)})")
 
-        abi_name, decoded_args = decode_input_try_all(input_data_raw)
-        if not abi_name:
-            update.message.reply_text("Error decoding input data with known ABIs.")
+        # Thử decode với cả 2 ABI
+        # decode với clanker trước
+        decoded = decode_input_with_web3(input_data_raw)  # cũ, dùng ABI clanker
+
+        # Nếu decode lỗi hoặc function không phải deployToken, thử decode revealcam (ABI mới)
+        if not decoded or decoded.get("function") != "deployToken":
+            # Decode với ABI revealcam
+            try:
+                with open("abi_revealcam.json", "r") as f:
+                    abi_revealcam = json.load(f)
+                contract_revealcam = w3.eth.contract(abi=abi_revealcam)
+                func_obj, func_args = contract_revealcam.decode_function_input(input_data_raw)
+                if func_obj.fn_name == "deployToken":
+                    decoded = {"function": func_obj.fn_name, "args": func_args}
+                    abi_used = "revealcam"
+                else:
+                    decoded = None
+            except Exception as e:
+                logger.warning(f"Failed decode revealcam ABI: {e}")
+                decoded = None
+        else:
+            abi_used = "clanker"
+
+        if not decoded:
+            update.message.reply_text("Error decoding input data.")
             return
 
-        if abi_name == "revealcam":
-            name = decoded_args.get("_name") or decoded_args.get("name")
-            symbol = decoded_args.get("_symbol") or decoded_args.get("symbol")
+        # Xử lý theo ABI dùng để decode
+        if abi_used == "revealcam":
+            args = decoded.get("args", {})
+            name = args.get("_name") or args.get("name")
+            symbol = args.get("_symbol") or args.get("symbol")
             if symbol and not symbol.startswith("$"):
                 symbol = f"${symbol}"
-            fid = decoded_args.get("_fid") or decoded_args.get("fid")
-            image = decoded_args.get("_image") or decoded_args.get("image")
-            deployer = decoded_args.get("_deployer") or decoded_args.get("deployer")
+            fid = args.get("_fid") or args.get("fid")
+            image = args.get("_image") or args.get("image")
+            deployer = args.get("_deployer") or args.get("deployer")
 
             reply = (
                 "*Token revealcam Information:*\n\n"
@@ -165,34 +191,38 @@ def handle_message(update: Update, context: CallbackContext):
                 f"*Image:* [Link]({image})\n\n"
                 f"*Deployer:* `{deployer}`"
             )
-        else:
-            # abi clanker
-            name = decoded_args.get("name")
-            symbol = decoded_args.get("symbol")
+        else:  # clanker
+            args = decoded.get("args", {}).get("deploymentConfig", {})
+            token_config = args.get("tokenConfig", {})
+            rewards_config = args.get("rewardsConfig", {})
+
+            name = token_config.get("name")
+            symbol = token_config.get("symbol")
             if symbol and not symbol.startswith("$"):
                 symbol = f"${symbol}"
-            image = decoded_args.get("image") or None
-            context_raw = decoded_args.get("context") or ""
-            creator_reward_recipient = decoded_args.get("creatorRewardRecipient") or None
+            image = token_config.get("image")
+            creator_reward_recipient = rewards_config.get("creatorRewardRecipient")
 
-            # Xử lý context hiển thị dạng key: value từng dòng
+            context_raw = token_config.get("context")
             try:
                 context_json = json.loads(context_raw)
-                context_lines = []
-                if isinstance(context_json, dict):
-                    for k, v in context_json.items():
-                        if v and str(v).strip():
-                            if k == "messageId":
-                                context_lines.append(f"{k}: [Link]({v})")
-                            elif k == "id":
-                                continue
-                            else:
-                                context_lines.append(f"{k}: {v}")
-                else:
-                    context_lines = [str(context_json)]
-                context_formatted = "\n".join(context_lines)
-            except Exception:
-                context_formatted = context_raw
+            except Exception as e:
+                logger.warning(f"Failed to parse context JSON: {e}")
+                context_json = {"context": context_raw}
+
+            context_lines = []
+            if isinstance(context_json, dict):
+                for key, value in context_json.items():
+                    if value and str(value).strip():
+                        if key == "messageId":
+                            context_lines.append(f"{key}: [Link]({value})")
+                        elif key == "id":
+                            continue
+                        else:
+                            context_lines.append(f"{key}: {value}")
+            else:
+                context_lines.append(str(context_json))
+            context_formatted = "\n".join(context_lines)
 
             reply = (
                 "*Token Deployment Information:*\n\n"
@@ -206,7 +236,6 @@ def handle_message(update: Update, context: CallbackContext):
 
         update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         logger.info("✅ Bot has responded successfully.")
-
     except Exception as e:
         logger.exception(f"❌ Unhandled error in handle_message: {e}")
 
