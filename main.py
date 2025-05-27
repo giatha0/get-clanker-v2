@@ -6,7 +6,6 @@ import requests
 
 from flask import Flask, request, jsonify
 from telegram import Bot, Update
-from telegram.constants import ParseMode
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 from web3 import Web3
 
@@ -126,7 +125,7 @@ def handle_message(update: Update, context: CallbackContext):
             logger.warning("⚠️ Message is not a valid contract address.")
             return
 
-        update.message.reply_text(f"Processing contract: `{msg_text}`", parse_mode=ParseMode.MARKDOWN)
+        update.message.reply_text(f"Processing contract: `{msg_text}`", parse_mode="Markdown")
         txhash = get_creation_txhash(msg_text)
         if not txhash:
             update.message.reply_text("Could not find txhash from BaseScan.")
@@ -227,7 +226,7 @@ def handle_message(update: Update, context: CallbackContext):
                 f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
             )
 
-        update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        update.message.reply_text(reply, parse_mode="Markdown")
         logger.info("✅ Bot has responded successfully.")
 
     except Exception as e:
