@@ -155,49 +155,59 @@ def handle_message(update: Update, context: CallbackContext):
             fid = decoded_args.get("_fid") or decoded_args.get("fid")
             image = decoded_args.get("_image") or decoded_args.get("image")
             deployer = decoded_args.get("_deployer") or decoded_args.get("deployer")
-            context_raw = decoded_args.get("_castHash") or decoded_args.get("castHash") or ""
-        else:
-            # Clanker abi
+            # Không cần context hiển thị cho revealcam (hoặc bạn có thể thêm nếu muốn)
+            
+            reply = (
+                f"*Token revealcam Information:*\n\n"
+                f"*From:* `{display_from}`\n"
+                f"*Name:* `{name}`\n"
+                f"*Symbol:* `{symbol}`\n"
+                f"*FID:* `{fid}`\n"
+                f"*Image:* [Link]({image})\n\n"
+                f"*Deployer:* `{deployer}`"
+            )
+
+        else:  # abi clanker
             name = decoded_args.get("name")
             symbol = decoded_args.get("symbol")
             if symbol and not symbol.startswith("$"):
                 symbol = f"${symbol}"
-            fid = None
-            image = None
-            deployer = decoded_args.get("deployer")
-            context_raw = ""
+            image = decoded_args.get("image") or None  # Nếu có trường image
+            context_raw = decoded_args.get("context") or ""  # Hoặc trường tương tự
+            creator_reward_recipient = decoded_args.get("creatorRewardRecipient") or None
 
-        # Xử lý context hiển thị (ví dụ JSON hay chuỗi)
-        try:
-            context_json = json.loads(context_raw)
-            context_lines = []
-            if isinstance(context_json, dict):
-                for k, v in context_json.items():
-                    if v and str(v).strip():
-                        if k == "messageId":
-                            context_lines.append(f"{k}: [Link]({v})")
-                        elif k == "id":
-                            continue
-                        else:
-                            context_lines.append(f"{k}: {v}")
-            else:
-                context_lines = [str(context_json)]
-            context_formatted = "\n".join(context_lines)
-        except Exception:
-            context_formatted = context_raw
+            # Xử lý context hiển thị
+            try:
+                context_json = json.loads(context_raw)
+                context_lines = []
+                if isinstance(context_json, dict):
+                    for k, v in context_json.items():
+                        if v and str(v).strip():
+                            if k == "messageId":
+                                context_lines.append(f"{k}: [Link]({v})")
+                            elif k == "id":
+                                continue
+                            else:
+                                context_lines.append(f"{k}: {v}")
+                else:
+                    context_lines = [str(context_json)]
+                context_formatted = "\n".join(context_lines)
+            except Exception:
+                context_formatted = context_raw
 
-        reply = (
-            f"*Token Deployment Information:*\n\n"
-            f"*From:* `{display_from}`\n"
-            f"*Name:* `{name}`\n"
-            f"*Symbol:* `{symbol}`\n"
-            f"*FID:* `{fid}`\n"
-            f"*Image:* [Link]({image})\n\n"
-            f"*Context:*\n{context_formatted}\n"
-            f"*Deployer:* `{deployer}`"
-        )
+            reply = (
+                f"*Token Clanker Information:*\n\n"
+                f"*From:* `{display_from}`\n"
+                f"*Name:* `{name}`\n"
+                f"*Symbol:* `{symbol}`\n"
+                f"*Image:* [Link]({image})\n\n"
+                f"*Context:*\n{context_formatted}\n\n"
+                f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
+            )
+
         update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
         logger.info("✅ Bot has responded successfully.")
+
     except Exception as e:
         logger.exception(f"❌ Unhandled error in handle_message: {e}")
 
