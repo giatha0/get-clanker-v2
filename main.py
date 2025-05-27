@@ -175,7 +175,7 @@ def handle_message(update: Update, context: CallbackContext):
             deployer = args.get("_deployer") or args.get("deployer")
 
             reply = (
-                "*Token revealcam Information:*\n\n"
+                "*REVEALCAM Information:*\n\n"
                 f"*From:* `{display_from}`\n"
                 f"*Name:* `{name}`\n"
                 f"*Symbol:* `{symbol}`\n"
@@ -217,7 +217,7 @@ def handle_message(update: Update, context: CallbackContext):
             context_formatted = "\n".join(context_lines)
 
             reply = (
-                "*Token Deployment Information:*\n\n"
+                "*CLANKER Information:*\n\n"
                 f"*From:* `{display_from}`\n"
                 f"*Name:* `{name}`\n"
                 f"*Symbol:* `{symbol}`\n"
