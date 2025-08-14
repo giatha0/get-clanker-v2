@@ -16,10 +16,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-API_BASESCAN = os.environ.get("API_BASESCAN")  # e.g. "https://api.basescan.org"
+API_BASESCAN = os.environ.get("API_BASESCAN")
 BASESCAN_API_KEY = os.environ.get("BASESCAN_API_KEY")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")        # e.g. "https://get-clank-production.up.railway.app"
-WEB3_PROVIDER_URL = os.environ.get("WEB3_PROVIDER_URL")  # e.g. "https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID"
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+WEB3_PROVIDER_URL = os.environ.get("WEB3_PROVIDER_URL")
 
 if not all([TELEGRAM_BOT_TOKEN, API_BASESCAN, BASESCAN_API_KEY, WEBHOOK_URL, WEB3_PROVIDER_URL]):
     logger.error("❌ Missing environment variables. Please configure TELEGRAM_BOT_TOKEN, API_BASESCAN, BASESCAN_API_KEY, WEBHOOK_URL, WEB3_PROVIDER_URL")
@@ -30,9 +30,6 @@ dp = Dispatcher(bot, None, use_context=True)
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URL))
 
-# -----------------------------------------------------------------------------
-# Load ABIs: Clanker v3.1 (legacy) and v4.0 (new)
-# -----------------------------------------------------------------------------
 try:
     with open("abi_clanker.json", "r", encoding="utf-8") as f:
         abi_clanker_v31 = json.load(f)
@@ -42,7 +39,6 @@ except Exception as e:
     logger.error(f"❌ Error loading Clanker v3.1 ABI: {e}")
     exit(1)
 
-# v4.0 is optional but recommended; fallback to v3.1 if not found
 try:
     with open("abi_clanker_v4.json", "r", encoding="utf-8") as f:
         abi_clanker_v40 = json.load(f)
@@ -60,10 +56,6 @@ ADDRESS_LABELS = {
     "0x2112b8456ac07c15fa31ddf3bf713e77716ff3f9": "bnkr deployer",
     "0xd9acd656a5f1b519c9e76a2a6092265a74186e58": "clanker interface"
 }
-
-# -----------------------------------------------------------------------------
-# BaseScan helpers
-# -----------------------------------------------------------------------------
 
 def get_creation_txhash(contract_address: str) -> str:
     try:
@@ -88,7 +80,6 @@ def get_creation_txhash(contract_address: str) -> str:
         logger.error(f"❌ Error fetching txhash: {e}")
         return None
 
-
 def get_transaction_data(txhash: str) -> dict:
     try:
         logger.info(f"📦 Fetching transaction data for txhash: {txhash}")
@@ -107,10 +98,6 @@ def get_transaction_data(txhash: str) -> dict:
         logger.error(f"❌ Error fetching transaction data: {e}")
         return {}
 
-# -----------------------------------------------------------------------------
-# Decoders
-# -----------------------------------------------------------------------------
-
 def _try_decode(contract, input_hex: str):
     if contract is None:
         return None
@@ -120,19 +107,11 @@ def _try_decode(contract, input_hex: str):
     except Exception:
         return None
 
-
 def _map_v4_to_v31_like(args_dict: dict) -> dict:
-    """
-    Map Clanker v4 deployToken args → shape similar to v3.1 so downstream code stays the same.
-    v4: deploymentConfig{ tokenConfig, poolConfig, lockerConfig, mevModuleConfig, extensionConfigs[] }
-    v3.1 expected by current code: { deploymentConfig{ tokenConfig{...}, rewardsConfig{ creatorRewardRecipient } } }
-    We'll best-effort extract creatorRewardRecipient from lockerConfig.rewardRecipients[0] if present.
-    """
     dc = args_dict.get("deploymentConfig") or args_dict.get(0) or {}
     token_cfg  = dc.get("tokenConfig")  or dc.get(0) or {}
     locker_cfg = dc.get("lockerConfig") or dc.get(2) or {}
 
-    # Normalize to dicts even if tuples
     def _get(container, key, idx=None, default=None):
         if isinstance(container, dict):
             return container.get(key, default)
@@ -143,7 +122,6 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
                 return default
         return default
 
-    # Pull v4 fields
     token_config_mapped = {
         "tokenAdmin"        : _get(token_cfg, "tokenAdmin", 0),
         "name"              : _get(token_cfg, "name", 1),
@@ -166,7 +144,6 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
     mapped = {
         "deploymentConfig": {
             "tokenConfig": token_config_mapped,
-            # Add a v3.1-like rewardsConfig minimal stub so downstream code works
             "rewardsConfig": {
                 "creatorRewardRecipient": creator_reward_recipient
             }
@@ -174,27 +151,18 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
     }
     return mapped
 
-
 def decode_input_with_web3(input_hex: str):
-    # 1) Try Clanker v4 first, then fallback to v3.1
     if HAS_V4:
         r = _try_decode(contract_clanker_v40, input_hex)
         if r and r["func"].fn_name == "deployToken":
-            # Map to v3.1-like output
             mapped_args = _map_v4_to_v31_like(dict(r["args"]))
             return {"function": "deployToken", "args": mapped_args}
 
-    # Fallback v3.1
     r = _try_decode(contract_clanker_v31, input_hex)
     if r and r["func"].fn_name == "deployToken":
-        # For v3.1 we can return as-is (it already has deploymentConfig with tokenConfig & rewardsConfig)
-        return {"function": r["func"].fn_name, "args": dict(r["args"]) }
+        return {"function": r["func"].fn_name, "args": dict(r["args"])}
 
     return None
-
-# -----------------------------------------------------------------------------
-# Telegram message handler
-# -----------------------------------------------------------------------------
 
 def handle_message(update: Update, context: CallbackContext):
     try:
@@ -236,7 +204,6 @@ def handle_message(update: Update, context: CallbackContext):
             update.message.reply_text("Error decoding input data with Clanker ABIs (v4/v3.1).")
             return
 
-        # Keep the same reply format as your current v3.1 flow
         args = decoded.get("args", {}).get("deploymentConfig", {})
         token_config = args.get("tokenConfig", {})
         rewards_config = args.get("rewardsConfig", {})
@@ -285,11 +252,6 @@ def handle_message(update: Update, context: CallbackContext):
     except Exception as e:
         logger.exception(f"❌ Unhandled error in handle_message: {e}")
 
-
-# -----------------------------------------------------------------------------
-# Telegram commands & Flask routes
-# -----------------------------------------------------------------------------
-
 def start_command(update: Update, context: CallbackContext):
     update.message.reply_text("Bot is ready. Please send a token contract address to process.")
 
@@ -312,7 +274,6 @@ def telegram_webhook():
 def index():
     return "🤖 Clanker Bot is running (Flask webhook)."
 
-
 def main():
     bot.delete_webhook(drop_pending_updates=True)
     hook_url = f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}"
@@ -322,9 +283,8 @@ def main():
     logger.info(f"✅ Webhook has been set: {hook_url}")
 
     port = int(os.environ.get("PORT", 80))
-    logger.info(f"🚀 Starting Flask server on port {port}}...")
+    logger.info(f"🚀 Starting Flask server on port {port}...")
     app.run(host="0.0.0.0", port=port)
-
 
 if __name__ == "__main__":
     main()
