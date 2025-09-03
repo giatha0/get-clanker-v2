@@ -314,7 +314,7 @@ def handle_message(update: Update, context: CallbackContext):
         )
 
         if metadata_formatted:
-            reply += f"*Metadata:*\n{metadata_formatted}\n\n"
+            reply += f"*Metadata(Check lại cẩn thận):*\n{metadata_formatted}\n\n"
 
         reply += f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
 
