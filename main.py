@@ -30,6 +30,7 @@ dp = Dispatcher(bot, None, use_context=True)
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URL))
 
+# Load ABI Clanker v3.1
 try:
     with open("abi_clanker.json", "r", encoding="utf-8") as f:
         abi_clanker_v31 = json.load(f)
@@ -39,6 +40,7 @@ except Exception as e:
     logger.error(f"❌ Error loading Clanker v3.1 ABI: {e}")
     exit(1)
 
+# Load ABI Clanker v4.0 (optional)
 try:
     with open("abi_clanker_v4.json", "r", encoding="utf-8") as f:
         abi_clanker_v40 = json.load(f)
@@ -108,6 +110,10 @@ def _try_decode(contract, input_hex: str):
         return None
 
 def _map_v4_to_v31_like(args_dict: dict) -> dict:
+    """
+    Chuẩn hóa một phần cấu trúc v4 -> v3.1-like để code cũ có thể hiển thị cơ bản.
+    (TokenConfig + một phần Rewards/Locker)
+    """
     dc = args_dict.get("deploymentConfig") or args_dict.get(0) or {}
     token_cfg  = dc.get("tokenConfig")  or dc.get(0) or {}
     locker_cfg = dc.get("lockerConfig") or dc.get(2) or {}
@@ -152,17 +158,71 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
     return mapped
 
 def decode_input_with_web3(input_hex: str):
+    # Thử decode bằng v4 trước
     if HAS_V4:
         r = _try_decode(contract_clanker_v40, input_hex)
         if r and r["func"].fn_name == "deployToken":
             mapped_args = _map_v4_to_v31_like(dict(r["args"]))
             return {"function": "deployToken", "args": mapped_args}
 
+    # Fallback: v3.1
     r = _try_decode(contract_clanker_v31, input_hex)
     if r and r["func"].fn_name == "deployToken":
         return {"function": r["func"].fn_name, "args": dict(r["args"])}
 
     return None
+
+def format_metadata(metadata_raw):
+    """
+    Trả về chuỗi nhiều dòng để đưa vào Telegram Markdown.
+    Chỉ hiển thị các trường không rỗng:
+      - description
+      - socialMediaUrls: list[{platform, url}]
+      - auditUrls: list[str] hoặc list[{label, url}]
+    Mỗi dòng có dạng: "<nhãn>: [url](url)" để bấm được.
+    """
+    lines = []
+    try:
+        metadata_json = json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+    except Exception as e:
+        logger.warning(f"Failed to parse metadata JSON: {e}")
+        metadata_json = {"raw": metadata_raw}
+
+    if isinstance(metadata_json, dict):
+        # 1) description
+        desc = metadata_json.get("description")
+        if desc and str(desc).strip():
+            lines.append(f"description: {desc}")
+
+        # 2) socialMediaUrls
+        sm_list = metadata_json.get("socialMediaUrls") or []
+        if isinstance(sm_list, (list, tuple)):
+            for item in sm_list:
+                if not isinstance(item, dict):
+                    continue
+                platform = (item.get("platform") or "link").strip()
+                url = (item.get("url") or "").strip()
+                if url:
+                    lines.append(f"{platform}: [{url}]({url})")
+
+        # 3) auditUrls
+        audit_list = metadata_json.get("auditUrls") or []
+        if isinstance(audit_list, (list, tuple)):
+            for a in audit_list:
+                if isinstance(a, dict):
+                    label = (a.get("label") or "audit").strip()
+                    url = (a.get("url") or "").strip()
+                    if url:
+                        lines.append(f"{label}: [{url}]({url})")
+                elif isinstance(a, str):
+                    if a.strip():
+                        lines.append(f"audit: [{a}]({a})")
+    else:
+        # Fallback: in nguyên nếu không phải dict
+        if metadata_json:
+            lines.append(str(metadata_json))
+
+    return "\n".join(lines)
 
 def handle_message(update: Update, context: CallbackContext):
     try:
@@ -215,6 +275,7 @@ def handle_message(update: Update, context: CallbackContext):
         image = token_config.get("image")
         creator_reward_recipient = rewards_config.get("creatorRewardRecipient")
 
+        # Parse context (giữ logic cũ)
         context_raw = token_config.get("context")
         try:
             context_json = json.loads(context_raw) if isinstance(context_raw, str) else context_raw
@@ -236,6 +297,13 @@ def handle_message(update: Update, context: CallbackContext):
             context_lines.append(str(context_json))
         context_formatted = "\n".join(context_lines)
 
+        # NEW: parse & format metadata (v4/v3.1 nếu có)
+        metadata_raw = token_config.get("metadata")
+        metadata_formatted = ""
+        if metadata_raw:
+            metadata_formatted = format_metadata(metadata_raw)
+
+        # Trả lời: giữ cấu trúc cũ + chèn Metadata nếu có
         reply = (
             "*CLANKER Information:*\n\n"
             f"*From:* `{display_from}`\n"
@@ -243,8 +311,12 @@ def handle_message(update: Update, context: CallbackContext):
             f"*Symbol:* `{symbol}`\n"
             f"*Image:* [Link]({image})\n\n"
             f"*Context:*\n{context_formatted}\n\n"
-            f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
         )
+
+        if metadata_formatted:
+            reply += f"*Metadata:*\n{metadata_formatted}\n\n"
+
+        reply += f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
 
         update.message.reply_text(reply, parse_mode="Markdown")
         logger.info("✅ Bot has responded successfully.")
