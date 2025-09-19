@@ -61,9 +61,10 @@ ADDRESS_LABELS = {
 
 def get_creation_txhash(contract_address: str) -> str:
     try:
-        logger.info(f"🔍 Getting creation txhash from BaseScan for contract {contract_address}")
-        url = f"{API_BASESCAN}/api"
+        logger.info(f"🔍 Getting creation txhash from Etherscan V2 for contract {contract_address}")
+        url = "https://api.etherscan.io/v2/api"
         params = {
+            "chainid": 8453,  # Base chain
             "module": "contract",
             "action": "getcontractcreation",
             "contractaddresses": contract_address,
@@ -82,11 +83,13 @@ def get_creation_txhash(contract_address: str) -> str:
         logger.error(f"❌ Error fetching txhash: {e}")
         return None
 
+
 def get_transaction_data(txhash: str) -> dict:
     try:
-        logger.info(f"📦 Fetching transaction data for txhash: {txhash}")
-        url = f"{API_BASESCAN}/api"
+        logger.info(f"📦 Fetching transaction data (V2) for txhash: {txhash}")
+        url = "https://api.etherscan.io/v2/api"
         params = {
+            "chainid": 8453,  # Base chain
             "module": "proxy",
             "action": "eth_getTransactionByHash",
             "txhash": txhash,
