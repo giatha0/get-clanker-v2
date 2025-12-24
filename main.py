@@ -110,6 +110,7 @@ def parse_token_created_event(txhash: str, contract_address: str) -> dict:
 
             decoded = abi_decode(
                 [
+                    "address", # msgSender  ❗ RẤT QUAN TRỌNG
                     "string",  # tokenImage
                     "string",  # tokenName
                     "string",  # tokenSymbol
@@ -128,6 +129,7 @@ def parse_token_created_event(txhash: str, contract_address: str) -> dict:
             )
 
             (
+                msg_sender,
                 token_image,
                 token_name,
                 token_symbol,
