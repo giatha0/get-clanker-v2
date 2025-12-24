@@ -148,10 +148,17 @@ def get_transaction_data(txhash: str) -> dict:
 
         tx_hash = tx.get("hash") if isinstance(tx, dict) else tx.hash
 
+        raw_input = tx.get("input") if isinstance(tx, dict) else tx["input"]
+        # RPC có thể trả input dưới dạng bytes → convert sang hex string
+        if isinstance(raw_input, (bytes, bytearray)):
+            input_hex = "0x" + raw_input.hex()
+        else:
+            input_hex = raw_input
+
         return {
             "from": tx.get("from") if isinstance(tx, dict) else tx["from"],
             "to": tx.get("to") if isinstance(tx, dict) else tx["to"],
-            "input": tx.get("input") if isinstance(tx, dict) else tx["input"],
+            "input": input_hex,
             "hash": tx_hash.hex() if hasattr(tx_hash, "hex") else tx_hash,
             "blockNumber": tx.get("blockNumber") if isinstance(tx, dict) else tx["blockNumber"],
         }
