@@ -84,30 +84,47 @@ def parse_token_created_event(txhash: str, contract_address: str) -> dict:
     """
     Parse TokenCreated event from tx receipt (RPC-only, stable)
     """
+    logger.info(f"🧪 [DEBUG] Parsing TokenCreated event for tx={txhash}, token={contract_address}")
     try:
         receipt = w3.eth.get_transaction_receipt(txhash)
+        logger.info(f"🧪 [DEBUG] Receipt has {len(receipt.get('logs', []))} logs")
         if not receipt:
             return None
 
         contract_address = Web3.to_checksum_address(contract_address)
 
-        for log in receipt["logs"]:
+        for i, log in enumerate(receipt["logs"]):
+            addr = log.get("address")
             topics = log.get("topics", [])
+            topic0 = topics[0].hex() if topics else None
+            logger.info(
+                f"🧪 [DEBUG] log[{i}] address={addr}, topic0={topic0}"
+            )
             if not topics:
                 continue
 
             # match TokenCreated event signature (factory emit)
             if topics[0].hex().lower() != TOKEN_CREATED_EVENT_SIG.lower():
+                logger.debug(
+                    f"🧪 [DEBUG] log[{i}] topic0 mismatch, expected={TOKEN_CREATED_EVENT_SIG}"
+                )
                 continue
+            logger.info(f"🧪 [DEBUG] log[{i}] TokenCreated signature MATCH")
 
             # OPTIONAL SAFETY: verify tokenAddress in topics[1]
             token_address = Web3.to_checksum_address("0x" + topics[1].hex()[-40:])
+            logger.info(
+                f"🧪 [DEBUG] log[{i}] tokenAddress={token_address}, target={contract_address}"
+            )
             if token_address.lower() != contract_address.lower():
                 continue
 
             token_admin   = Web3.to_checksum_address("0x" + topics[2].hex()[-40:])
 
             data = bytes.fromhex(log["data"][2:])
+            logger.info(
+                f"🧪 [DEBUG] log[{i}] data length={len(data)} bytes"
+            )
 
             decoded = abi_decode(
                 [
@@ -146,6 +163,9 @@ def parse_token_created_event(txhash: str, contract_address: str) -> dict:
                 extensions
             ) = decoded
 
+            logger.info(
+                f"✅ [DEBUG] TokenCreated parsed successfully for {token_address}"
+            )
             return {
                 "tokenAddress": token_address,
                 "tokenAdmin": token_admin,
