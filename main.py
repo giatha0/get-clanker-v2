@@ -189,6 +189,27 @@ ADDRESS_LABELS = {
     "0xd9acd656a5f1b519c9e76a2a6092265a74186e58": "clanker interface"
 }
 
+# --- BASE KNOWN TOKENS ---
+BASE_KNOWN_TOKENS = {
+    "0x4200000000000000000000000000000000000006": "WETH",
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
+}
+# --- Utility: Classify paired token ---
+def classify_paired_token(addr: str):
+    if not addr:
+        return "Unknown"
+
+    addr_lc = addr.lower()
+
+    if addr_lc in BASE_KNOWN_TOKENS:
+        return BASE_KNOWN_TOKENS[addr_lc]
+
+    # ETH native (Clanker có thể wrap logic)
+    if addr_lc == "0x0000000000000000000000000000000000000000":
+        return "ETH"
+
+    return f"ERC20 ({addr})"
+
 def get_creation_txhash(contract_address: str) -> str:
     """
     RPC-only method to find contract creation txhash (no API key).
@@ -600,33 +621,12 @@ def handle_message(update: Update, context: CallbackContext):
         token_config = decoded.get("tokenConfig", {})
         creator_reward_recipient = decoded.get("creatorRewardRecipient")
 
+        # Only show paired token in poolConfig, classify it
         pool_config = decoded.get("poolConfig", {})
-
-        pool_hook = pool_config.get("poolHook")
         paired_token = pool_config.get("pairedToken")
-        tick = pool_config.get("tickIfToken0IsClanker")
-        tick_spacing = pool_config.get("tickSpacing")
-
-        # --- Detect token0/token1 (Uniswap v4 style) ---
-        token_address = Web3.to_checksum_address(msg_text)
         paired_token = Web3.to_checksum_address(paired_token) if paired_token else None
-
-        if paired_token and token_address.lower() < paired_token.lower():
-            token0 = token_address
-            token1 = paired_token
-            clanker_is_token0 = True
-        else:
-            token0 = paired_token
-            token1 = token_address
-            clanker_is_token0 = False
-
-        # --- Compute tick range ---
-        tick_lower, tick_upper = compute_tick_range(tick, tick_spacing)
-
-        # (Optional) Debug log for LP info
-        logger.info(
-            f"🧪 LP Info | token0={token0}, token1={token1}, range=({tick_lower},{tick_upper})"
-        )
+        paired_token_label = classify_paired_token(paired_token)
+        logger.info(f"🧪 Paired token detected: {paired_token} ({paired_token_label})")
 
         name = token_config.get("name")
         symbol = token_config.get("symbol")
@@ -675,16 +675,10 @@ def handle_message(update: Update, context: CallbackContext):
         if metadata_formatted:
             reply += f"*Metadata(Check lại cẩn thận, có thể fake):*\n{metadata_formatted}\n\n"
 
-        # Pool Config block (with LP range & token0/token1)
+        # Pool Config block (only Paired Token)
         reply += (
             "*Pool Configuration:*\n"
-            f"*Pool Hook:* `{pool_hook}`\n"
-            f"*Paired Token:* `{paired_token}`\n"
-            f"*Token0:* `{token0}`\n"
-            f"*Token1:* `{token1}`\n"
-            f"*Starting Tick:* `{tick}`\n"
-            f"*Tick Spacing:* `{tick_spacing}`\n"
-            f"*LP Range:* `{tick_lower}` → `{tick_upper}`\n\n"
+            f"*Paired Token:* `{paired_token_label}`\n\n"
         )
 
         reply += f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
