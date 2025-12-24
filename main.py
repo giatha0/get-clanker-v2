@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from telegram import Bot, Update
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 from web3 import Web3
+from web3.middleware import geth_poa_middleware
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -28,7 +29,20 @@ if not all([TELEGRAM_BOT_TOKEN, API_BASESCAN, BASESCAN_API_KEY, WEBHOOK_URL, WEB
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(bot, None, use_context=True)
 
-w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URL))
+w3 = Web3(
+    Web3.HTTPProvider(
+        WEB3_PROVIDER_URL,
+        request_kwargs={"timeout": 15}
+    )
+)
+
+# ⚠️ RẤT QUAN TRỌNG: clear middleware mặc định (tránh eth_estimateGas)
+w3.middleware_onion.clear()
+
+# Base dùng POA-compatible middleware
+w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+
+logger.info("✅ Web3 RPC initialized with middleware cleared (Alchemy-safe)")
 
 # Load ABI Clanker v3.1
 try:
@@ -73,7 +87,8 @@ def get_creation_txhash(contract_address: str) -> str:
         latest_block = w3.eth.block_number
 
         # --- Step 1: binary search deploy block ---
-        low, high = 0, latest_block
+        # Base mainnet chỉ cần search từ block ~5M trở lên
+        low, high = 5_000_000, latest_block
         deploy_block = None
 
         while low <= high:
@@ -113,22 +128,28 @@ def get_creation_txhash(contract_address: str) -> str:
 
 
 def get_transaction_data(txhash: str) -> dict:
+    """
+    RPC-only: fetch transaction data via eth_getTransactionByHash
+    Keeps ABI decode logic unchanged.
+    """
     try:
-        logger.info(f"📦 Fetching transaction data (V2) for txhash: {txhash}")
-        url = "https://api.etherscan.io/v2/api"
-        params = {
-            "chainid": 8453,  # Base chain
-            "module": "proxy",
-            "action": "eth_getTransactionByHash",
-            "txhash": txhash,
-            "apikey": BASESCAN_API_KEY
+        logger.info(f"📦 [RPC] Fetching transaction data for txhash: {txhash}")
+
+        tx = w3.eth.get_transaction(txhash)
+        if not tx:
+            logger.error("❌ [RPC] Transaction not found")
+            return {}
+
+        return {
+            "from": tx.get("from"),
+            "to": tx.get("to"),
+            "input": tx.get("input"),
+            "hash": tx.hash.hex() if hasattr(tx.hash, "hex") else tx.hash,
+            "blockNumber": tx.get("blockNumber"),
         }
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json()
-        logger.info("✅ Transaction data retrieved.")
-        return data.get("result", {})
+
     except Exception as e:
-        logger.error(f"❌ Error fetching transaction data: {e}")
+        logger.exception(f"❌ [RPC] Error fetching transaction data: {e}")
         return {}
 
 def _try_decode(contract, input_hex: str):
@@ -267,12 +288,12 @@ def handle_message(update: Update, context: CallbackContext):
         update.message.reply_text(f"Processing contract: `{msg_text}`", parse_mode="Markdown")
         txhash = get_creation_txhash(msg_text)
         if not txhash:
-            update.message.reply_text("Could not find txhash from BaseScan.")
+            update.message.reply_text("Could not find creation transaction via RPC.")
             return
 
         tx_data = get_transaction_data(txhash)
         if not tx_data:
-            update.message.reply_text("Failed to retrieve transaction data from BaseScan.")
+            update.message.reply_text("Failed to retrieve transaction data via RPC.")
             return
 
         from_address = tx_data.get("from", "")
