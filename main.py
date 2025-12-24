@@ -61,72 +61,54 @@ ADDRESS_LABELS = {
 
 def get_creation_txhash(contract_address: str) -> str:
     """
-    Try to get contract creation txhash on Base (chainid 8453).
-    Strategy:
-    1) Etherscan V2: contract.getcontractcreation
-    2) Fallback: account.txlist (first tx where to == None)
+    RPC-only method to find contract creation txhash (no API key).
+    Steps:
+    1) Binary search to find deploy block using eth_getCode
+    2) Scan that block to find tx whose receipt.contractAddress == contract
     """
     try:
-        logger.info(f"🔍 Getting creation txhash from Etherscan V2 for contract {contract_address}")
+        logger.info(f"🔍 [RPC] Finding creation txhash for contract {contract_address}")
 
-        # --- Strategy 1: getcontractcreation ---
-        url = "https://api.etherscan.io/v2/api"
-        params = {
-            "chainid": 8453,
-            "module": "contract",
-            "action": "getcontractcreation",
-            "contractaddresses": contract_address,
-            "apikey": BASESCAN_API_KEY
-        }
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json()
+        contract_address = Web3.to_checksum_address(contract_address)
+        latest_block = w3.eth.block_number
 
-        result = data.get("result")
+        # --- Step 1: binary search deploy block ---
+        low, high = 0, latest_block
+        deploy_block = None
 
-        # V2 có lúc trả dict thay vì list
-        if isinstance(result, list) and len(result) > 0:
-            txhash = result[0].get("txHash")
-            if txhash:
-                logger.info(f"✅ Found txhash via getcontractcreation: {txhash}")
-                return txhash
+        while low <= high:
+            mid = (low + high) // 2
+            code = w3.eth.get_code(contract_address, mid)
+            if code and code != b"":
+                deploy_block = mid
+                high = mid - 1
+            else:
+                low = mid + 1
 
-        if isinstance(result, dict):
-            txhash = result.get("txHash")
-            if txhash:
-                logger.info(f"✅ Found txhash via getcontractcreation (dict): {txhash}")
-                return txhash
+        if deploy_block is None:
+            logger.error("❌ [RPC] Could not determine deploy block")
+            return None
 
-        logger.warning("⚠️ getcontractcreation returned no usable result, fallback to txlist")
+        logger.info(f"✅ [RPC] Contract deployed at block {deploy_block}")
 
-        # --- Strategy 2: fallback to txlist ---
-        params = {
-            "chainid": 8453,
-            "module": "account",
-            "action": "txlist",
-            "address": contract_address,
-            "page": 1,
-            "offset": 5,
-            "sort": "asc",
-            "apikey": BASESCAN_API_KEY
-        }
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json()
-        txs = data.get("result", [])
+        # --- Step 2: scan deploy block for creation tx ---
+        block = w3.eth.get_block(deploy_block, full_transactions=True)
 
-        if isinstance(txs, list):
-            for tx in txs:
-                # Contract creation tx: to == None or empty
-                if not tx.get("to"):
-                    txhash = tx.get("hash")
-                    if txhash:
-                        logger.info(f"✅ Found txhash via txlist fallback: {txhash}")
-                        return txhash
+        for tx in block.transactions:
+            try:
+                receipt = w3.eth.get_transaction_receipt(tx.hash)
+                if receipt.contractAddress and receipt.contractAddress.lower() == contract_address.lower():
+                    txhash = tx.hash.hex()
+                    logger.info(f"✅ [RPC] Found creation txhash: {txhash}")
+                    return txhash
+            except Exception:
+                continue
 
-        logger.error(f"❌ No creation txhash found for contract {contract_address}")
+        logger.error("❌ [RPC] Creation tx not found in deploy block")
         return None
 
     except Exception as e:
-        logger.exception(f"❌ Error fetching creation txhash: {e}")
+        logger.exception(f"❌ [RPC] Error finding creation txhash: {e}")
         return None
 
 
