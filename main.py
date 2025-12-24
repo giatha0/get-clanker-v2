@@ -146,12 +146,14 @@ def get_transaction_data(txhash: str) -> dict:
             logger.error("❌ [RPC] Transaction not found")
             return {}
 
+        tx_hash = tx.get("hash") if isinstance(tx, dict) else tx.hash
+
         return {
-            "from": tx.get("from"),
-            "to": tx.get("to"),
-            "input": tx.get("input"),
-            "hash": tx.hash.hex() if hasattr(tx.hash, "hex") else tx.hash,
-            "blockNumber": tx.get("blockNumber"),
+            "from": tx.get("from") if isinstance(tx, dict) else tx["from"],
+            "to": tx.get("to") if isinstance(tx, dict) else tx["to"],
+            "input": tx.get("input") if isinstance(tx, dict) else tx["input"],
+            "hash": tx_hash.hex() if hasattr(tx_hash, "hex") else tx_hash,
+            "blockNumber": tx.get("blockNumber") if isinstance(tx, dict) else tx["blockNumber"],
         }
 
     except Exception as e:
