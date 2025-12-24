@@ -109,11 +109,16 @@ def get_creation_txhash(contract_address: str) -> str:
         # --- Step 2: scan deploy block for creation tx ---
         block = w3.eth.get_block(deploy_block, full_transactions=True)
 
-        for tx in block.transactions:
+        # block có thể là dict hoặc AttributeDict tùy provider
+        transactions = block.get("transactions") if isinstance(block, dict) else block.transactions
+
+        for tx in transactions:
             try:
-                receipt = w3.eth.get_transaction_receipt(tx.hash)
+                tx_hash = tx.get("hash") if isinstance(tx, dict) else tx.hash
+                receipt = w3.eth.get_transaction_receipt(tx_hash)
+
                 if receipt.contractAddress and receipt.contractAddress.lower() == contract_address.lower():
-                    txhash = tx.hash.hex()
+                    txhash = tx_hash.hex() if hasattr(tx_hash, "hex") else tx_hash
                     logger.info(f"✅ [RPC] Found creation txhash: {txhash}")
                     return txhash
             except Exception:
