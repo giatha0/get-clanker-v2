@@ -228,30 +228,30 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
     return mapped
 
 def decode_input_with_web3(input_hex: str, to_address: str):
-    """
-    Decode input using Clanker factory ABI at correct contract address
-    """
     try:
         to_address = Web3.to_checksum_address(to_address)
     except Exception:
         return None
 
-    contract_v4 = w3.eth.contract(address=to_address, abi=abi_clanker_v40) if HAS_V4 else None
-    contract_v31 = w3.eth.contract(address=to_address, abi=abi_clanker_v31)
+    contracts = []
+    if HAS_V4:
+        contracts.append(w3.eth.contract(address=to_address, abi=abi_clanker_v40))
+    contracts.append(w3.eth.contract(address=to_address, abi=abi_clanker_v31))
 
-    # Try v4 first
-    if contract_v4:
-        r = _try_decode(contract_v4, input_hex)
-        if r and r["func"].fn_name == "deployToken":
-            mapped_args = _map_v4_to_v31_like(dict(r["args"]))
-            return {"function": "deployToken", "args": mapped_args}
-
-    # Fallback v3.1
-    r = _try_decode(contract_v31, input_hex)
-    if r and r["func"].fn_name == "deployToken":
-        return {"function": r["func"].fn_name, "args": dict(r["args"])}
+    for contract in contracts:
+        try:
+            func_obj, func_args = contract.decode_function_input(input_hex)
+            # CHỈ CẦN deploymentConfig tồn tại
+            if isinstance(func_args, dict) and "deploymentConfig" in func_args:
+                return {
+                    "function": func_obj.fn_name,
+                    "args": func_args
+                }
+        except Exception:
+            continue
 
     return None
+
 
 def format_metadata(metadata_raw):
     """
