@@ -76,6 +76,89 @@ DEPLOY_TOKEN_SELECTOR = keccak(text=
     ",(address,uint256,uint16,bytes)[])"
 )[:4].hex()
 
+# --- TokenCreated event signature for event parsing ---
+TOKEN_CREATED_EVENT_SIG = keccak(text=
+    "TokenCreated(address,address,address,string,string,string,string,string,int24,address,bytes32,address,address,address,uint256,address[])"
+).hex()
+def parse_token_created_event(txhash: str, contract_address: str) -> dict:
+    """
+    Parse TokenCreated event from tx receipt (RPC-only, stable)
+    """
+    try:
+        receipt = w3.eth.get_transaction_receipt(txhash)
+        if not receipt:
+            return None
+
+        contract_address = Web3.to_checksum_address(contract_address)
+
+        for log in receipt["logs"]:
+            if log["address"].lower() != contract_address.lower():
+                continue
+
+            topics = log.get("topics", [])
+            if not topics:
+                continue
+
+            if topics[0].hex() != "0x" + TOKEN_CREATED_EVENT_SIG:
+                continue
+
+            # indexed fields
+            token_address = Web3.to_checksum_address("0x" + topics[1].hex()[-40:])
+            token_admin   = Web3.to_checksum_address("0x" + topics[2].hex()[-40:])
+
+            data = bytes.fromhex(log["data"][2:])
+
+            decoded = abi_decode(
+                [
+                    "string",  # tokenImage
+                    "string",  # tokenName
+                    "string",  # tokenSymbol
+                    "string",  # tokenMetadata
+                    "string",  # tokenContext
+                    "int24",   # startingTick
+                    "address", # poolHook
+                    "bytes32", # poolId
+                    "address", # pairedToken
+                    "address", # locker
+                    "address", # mevModule
+                    "uint256", # extensionsSupply
+                    "address[]"# extensions
+                ],
+                data
+            )
+
+            (
+                token_image,
+                token_name,
+                token_symbol,
+                token_metadata,
+                token_context,
+                starting_tick,
+                pool_hook,
+                pool_id,
+                paired_token,
+                locker,
+                mev_module,
+                extensions_supply,
+                extensions
+            ) = decoded
+
+            return {
+                "tokenAddress": token_address,
+                "tokenAdmin": token_admin,
+                "name": token_name,
+                "symbol": token_symbol,
+                "image": token_image,
+                "metadata": token_metadata,
+                "context": token_context,
+            }
+
+        return None
+
+    except Exception as e:
+        logger.exception(f"❌ Failed to parse TokenCreated event: {e}")
+        return None
+
 app = Flask(__name__)
 
 ADDRESS_LABELS = {
@@ -392,21 +475,26 @@ def handle_message(update: Update, context: CallbackContext):
 
         logger.info(f"🔍 Input data raw (first 20 chars): {input_data_raw[:20]}... (length: {len(input_data_raw)})")
 
-        decoded = decode_input_with_web3(input_data_raw, tx_data.get("to"))
-        if not decoded or decoded.get("function") != "deployToken":
-            update.message.reply_text("Error decoding input data with Clanker ABIs (v4/v3.1).")
+        # --- Use event parsing instead of calldata decode ---
+        event_data = parse_token_created_event(txhash, tx_data.get("to"))
+        if not event_data:
+            update.message.reply_text("Error parsing TokenCreated event.")
             return
 
-        args = decoded.get("args", {}).get("deploymentConfig", {})
-        token_config = args.get("tokenConfig", {})
-        rewards_config = args.get("rewardsConfig", {})
+        token_config = {
+            "name": event_data.get("name"),
+            "symbol": event_data.get("symbol"),
+            "image": event_data.get("image"),
+            "metadata": event_data.get("metadata"),
+            "context": event_data.get("context"),
+        }
+        creator_reward_recipient = event_data.get("tokenAdmin")
 
         name = token_config.get("name")
         symbol = token_config.get("symbol")
         if symbol and not str(symbol).startswith("$"):
             symbol = f"${symbol}"
         image = token_config.get("image")
-        creator_reward_recipient = rewards_config.get("creatorRewardRecipient")
 
         # Parse context (giữ logic cũ)
         context_raw = token_config.get("context")
