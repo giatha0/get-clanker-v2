@@ -417,6 +417,7 @@ def decode_input_with_web3(input_hex: str, to_address: str):
     }
 
 
+
 # --- Clanker v4 RAW calldata decode (LP-mint aware, no event) ---
 def decode_clanker_v4_raw(input_hex: str):
     """
@@ -443,7 +444,8 @@ def decode_clanker_v4_raw(input_hex: str):
             payload
         )
 
-        token_cfg = decoded[0][0]
+        token_cfg  = decoded[0][0]
+        pool_cfg   = decoded[0][1]
         locker_cfg = decoded[0][2]
 
         creator_reward_recipient = None
@@ -465,12 +467,40 @@ def decode_clanker_v4_raw(input_hex: str):
                 "context": token_cfg[6],
                 "originatingChainId": token_cfg[7],
             },
+            "poolConfig": {
+                "poolHook": pool_cfg[0],
+                "pairedToken": pool_cfg[1],
+                "tickIfToken0IsClanker": pool_cfg[2],
+                "tickSpacing": pool_cfg[3],
+            },
             "creatorRewardRecipient": creator_reward_recipient
         }
 
     except Exception as e:
         logger.error(f"❌ Clanker v4 raw decode failed: {e}")
         return None
+
+
+# --- Utility: Compute tick range (Uniswap v4 style) ---
+def compute_tick_range(starting_tick: int, tick_spacing: int):
+    """
+    Chuẩn Uniswap v4:
+    - Range mặc định: +/- 2 * tickSpacing * 100
+    - Clamp về bội số tickSpacing
+    """
+    if starting_tick is None or tick_spacing is None:
+        return None, None
+
+    try:
+        lower = starting_tick - (tick_spacing * 100)
+        upper = starting_tick + (tick_spacing * 100)
+
+        # clamp
+        lower = (lower // tick_spacing) * tick_spacing
+        upper = (upper // tick_spacing) * tick_spacing
+        return lower, upper
+    except Exception:
+        return None, None
 
 
 def format_metadata(metadata_raw):
@@ -570,6 +600,34 @@ def handle_message(update: Update, context: CallbackContext):
         token_config = decoded.get("tokenConfig", {})
         creator_reward_recipient = decoded.get("creatorRewardRecipient")
 
+        pool_config = decoded.get("poolConfig", {})
+
+        pool_hook = pool_config.get("poolHook")
+        paired_token = pool_config.get("pairedToken")
+        tick = pool_config.get("tickIfToken0IsClanker")
+        tick_spacing = pool_config.get("tickSpacing")
+
+        # --- Detect token0/token1 (Uniswap v4 style) ---
+        token_address = Web3.to_checksum_address(msg_text)
+        paired_token = Web3.to_checksum_address(paired_token) if paired_token else None
+
+        if paired_token and token_address.lower() < paired_token.lower():
+            token0 = token_address
+            token1 = paired_token
+            clanker_is_token0 = True
+        else:
+            token0 = paired_token
+            token1 = token_address
+            clanker_is_token0 = False
+
+        # --- Compute tick range ---
+        tick_lower, tick_upper = compute_tick_range(tick, tick_spacing)
+
+        # (Optional) Debug log for LP info
+        logger.info(
+            f"🧪 LP Info | token0={token0}, token1={token1}, range=({tick_lower},{tick_upper})"
+        )
+
         name = token_config.get("name")
         symbol = token_config.get("symbol")
         if symbol and not str(symbol).startswith("$"):
@@ -616,6 +674,18 @@ def handle_message(update: Update, context: CallbackContext):
 
         if metadata_formatted:
             reply += f"*Metadata(Check lại cẩn thận, có thể fake):*\n{metadata_formatted}\n\n"
+
+        # Pool Config block (with LP range & token0/token1)
+        reply += (
+            "*Pool Configuration:*\n"
+            f"*Pool Hook:* `{pool_hook}`\n"
+            f"*Paired Token:* `{paired_token}`\n"
+            f"*Token0:* `{token0}`\n"
+            f"*Token1:* `{token1}`\n"
+            f"*Starting Tick:* `{tick}`\n"
+            f"*Tick Spacing:* `{tick_spacing}`\n"
+            f"*LP Range:* `{tick_lower}` → `{tick_upper}`\n\n"
+        )
 
         reply += f"*Creator Reward Recipient:* `{creator_reward_recipient}`"
 
