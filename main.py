@@ -92,19 +92,19 @@ def parse_token_created_event(txhash: str, contract_address: str) -> dict:
         contract_address = Web3.to_checksum_address(contract_address)
 
         for log in receipt["logs"]:
-            if log["address"].lower() != contract_address.lower():
-                continue
-
             topics = log.get("topics", [])
             if not topics:
                 continue
 
-            # FIX: Compare normalized event signature (topics[0].hex() does not include "0x")
-            if topics[0].hex() != TOKEN_CREATED_EVENT_SIG:
+            # match TokenCreated event signature (factory emit)
+            if topics[0].hex().lower() != TOKEN_CREATED_EVENT_SIG.lower():
                 continue
 
-            # indexed fields
+            # OPTIONAL SAFETY: verify tokenAddress in topics[1]
             token_address = Web3.to_checksum_address("0x" + topics[1].hex()[-40:])
+            if token_address.lower() != contract_address.lower():
+                continue
+
             token_admin   = Web3.to_checksum_address("0x" + topics[2].hex()[-40:])
 
             data = bytes.fromhex(log["data"][2:])
