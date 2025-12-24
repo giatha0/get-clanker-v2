@@ -99,7 +99,8 @@ def parse_token_created_event(txhash: str, contract_address: str) -> dict:
             if not topics:
                 continue
 
-            if topics[0].hex() != "0x" + TOKEN_CREATED_EVENT_SIG:
+            # FIX: Compare normalized event signature (topics[0].hex() does not include "0x")
+            if topics[0].hex() != TOKEN_CREATED_EVENT_SIG:
                 continue
 
             # indexed fields
