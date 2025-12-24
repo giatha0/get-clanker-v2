@@ -254,25 +254,13 @@ def decode_input_with_web3(input_hex: str, to_address: str):
     try:
         decoded = abi_decode(
             [
-                (
-                    # DeploymentConfig
-                    (
-                        "address","string","string","bytes32","string","string","string","uint256"
-                    ),
-                    (
-                        "address","address","int24","int24","bytes"
-                    ),
-                    (
-                        "address","address[]","address[]","uint16[]",
-                        "int24[]","int24[]","uint16[]","bytes"
-                    ),
-                    (
-                        "address","bytes"
-                    ),
-                    (
-                        "address","uint256","uint16","bytes"
-                    )[]
-                )
+                "("
+                "(address,string,string,bytes32,string,string,string,uint256),"
+                "(address,address,int24,int24,bytes),"
+                "(address,address[],address[],uint16[],int24[],int24[],uint16[],bytes),"
+                "(address,bytes),"
+                "(address,uint256,uint16,bytes)[]"
+                ")"
             ],
             payload
         )
