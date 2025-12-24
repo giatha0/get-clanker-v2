@@ -9,6 +9,8 @@ from telegram import Bot, Update
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
+from eth_abi import decode as abi_decode
+from eth_utils import keccak
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -64,6 +66,15 @@ except Exception as e:
     HAS_V4 = False
     contract_clanker_v40 = None
     logger.warning(f"⚠️ Clanker v4.0 ABI not loaded: {e}. Will decode with v3.1 only.")
+
+# --- deployToken selector for manual decode ---
+DEPLOY_TOKEN_SELECTOR = keccak(text=
+    "deployToken((address,string,string,bytes32,string,string,string,uint256)"
+    ",(address,address,int24,int24,bytes)"
+    ",(address,address[],address[],uint16[],int24[],int24[],uint16[],bytes)"
+    ",(address,bytes)"
+    ",(address,uint256,uint16,bytes)[])"
+)[:4].hex()
 
 app = Flask(__name__)
 
@@ -228,29 +239,82 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
     return mapped
 
 def decode_input_with_web3(input_hex: str, to_address: str):
-    try:
-        to_address = Web3.to_checksum_address(to_address)
-    except Exception:
+    """
+    Decode deployToken calldata using eth_abi (web3 decode is NOT reliable here)
+    """
+    if not input_hex or not input_hex.startswith("0x"):
         return None
 
-    contracts = []
-    if HAS_V4:
-        contracts.append(w3.eth.contract(address=to_address, abi=abi_clanker_v40))
-    contracts.append(w3.eth.contract(address=to_address, abi=abi_clanker_v31))
+    selector = input_hex[2:10]
+    if selector != DEPLOY_TOKEN_SELECTOR:
+        return None
 
-    for contract in contracts:
-        try:
-            func_obj, func_args = contract.decode_function_input(input_hex)
-            # CHỈ CẦN deploymentConfig tồn tại
-            if isinstance(func_args, dict) and "deploymentConfig" in func_args:
-                return {
-                    "function": func_obj.fn_name,
-                    "args": func_args
+    payload = bytes.fromhex(input_hex[10:])
+
+    try:
+        decoded = abi_decode(
+            [
+                (
+                    # DeploymentConfig
+                    (
+                        "address","string","string","bytes32","string","string","string","uint256"
+                    ),
+                    (
+                        "address","address","int24","int24","bytes"
+                    ),
+                    (
+                        "address","address[]","address[]","uint16[]",
+                        "int24[]","int24[]","uint16[]","bytes"
+                    ),
+                    (
+                        "address","bytes"
+                    ),
+                    (
+                        "address","uint256","uint16","bytes"
+                    )[]
+                )
+            ],
+            payload
+        )
+    except Exception as e:
+        logger.error(f"❌ eth_abi decode failed: {e}")
+        return None
+
+    # unpack
+    deployment = decoded[0]
+
+    token_cfg, pool_cfg, locker_cfg, mev_cfg, ext_cfgs = deployment
+
+    token_config = {
+        "tokenAdmin": token_cfg[0],
+        "name": token_cfg[1],
+        "symbol": token_cfg[2],
+        "salt": token_cfg[3].hex(),
+        "image": token_cfg[4],
+        "metadata": token_cfg[5],
+        "context": token_cfg[6],
+        "originatingChainId": token_cfg[7],
+    }
+
+    creator_reward_recipient = None
+    try:
+        reward_recipients = locker_cfg[2]
+        if reward_recipients:
+            creator_reward_recipient = reward_recipients[0]
+    except Exception:
+        pass
+
+    return {
+        "function": "deployToken",
+        "args": {
+            "deploymentConfig": {
+                "tokenConfig": token_config,
+                "rewardsConfig": {
+                    "creatorRewardRecipient": creator_reward_recipient
                 }
-        except Exception:
-            continue
-
-    return None
+            }
+        }
+    }
 
 
 def format_metadata(metadata_raw):
