@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 API_BASESCAN = os.environ.get("API_BASESCAN")
-BASESCAN_API_KEY = os.environ.get("BASESCAN_API_KEY")
+BASESCAN_API_KEY = os.environ.get("BASESCAN_API_KEY") # use ethscan api
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 WEB3_PROVIDER_URL = os.environ.get("WEB3_PROVIDER_URL")
 
@@ -60,11 +60,19 @@ ADDRESS_LABELS = {
 }
 
 def get_creation_txhash(contract_address: str) -> str:
+    """
+    Try to get contract creation txhash on Base (chainid 8453).
+    Strategy:
+    1) Etherscan V2: contract.getcontractcreation
+    2) Fallback: account.txlist (first tx where to == None)
+    """
     try:
         logger.info(f"🔍 Getting creation txhash from Etherscan V2 for contract {contract_address}")
+
+        # --- Strategy 1: getcontractcreation ---
         url = "https://api.etherscan.io/v2/api"
         params = {
-            "chainid": 8453,  # Base chain
+            "chainid": 8453,
             "module": "contract",
             "action": "getcontractcreation",
             "contractaddresses": contract_address,
@@ -72,15 +80,53 @@ def get_creation_txhash(contract_address: str) -> str:
         }
         resp = requests.get(url, params=params, timeout=10)
         data = resp.json()
-        results = data.get("result", [])
-        if not results or not isinstance(results, list):
-            logger.error(f"❌ No result for contract {contract_address}")
-            return None
-        txhash = results[0].get("txHash")
-        logger.info(f"✅ Found txhash: {txhash}")
-        return txhash
+
+        result = data.get("result")
+
+        # V2 có lúc trả dict thay vì list
+        if isinstance(result, list) and len(result) > 0:
+            txhash = result[0].get("txHash")
+            if txhash:
+                logger.info(f"✅ Found txhash via getcontractcreation: {txhash}")
+                return txhash
+
+        if isinstance(result, dict):
+            txhash = result.get("txHash")
+            if txhash:
+                logger.info(f"✅ Found txhash via getcontractcreation (dict): {txhash}")
+                return txhash
+
+        logger.warning("⚠️ getcontractcreation returned no usable result, fallback to txlist")
+
+        # --- Strategy 2: fallback to txlist ---
+        params = {
+            "chainid": 8453,
+            "module": "account",
+            "action": "txlist",
+            "address": contract_address,
+            "page": 1,
+            "offset": 5,
+            "sort": "asc",
+            "apikey": BASESCAN_API_KEY
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json()
+        txs = data.get("result", [])
+
+        if isinstance(txs, list):
+            for tx in txs:
+                # Contract creation tx: to == None or empty
+                if not tx.get("to"):
+                    txhash = tx.get("hash")
+                    if txhash:
+                        logger.info(f"✅ Found txhash via txlist fallback: {txhash}")
+                        return txhash
+
+        logger.error(f"❌ No creation txhash found for contract {contract_address}")
+        return None
+
     except Exception as e:
-        logger.error(f"❌ Error fetching txhash: {e}")
+        logger.exception(f"❌ Error fetching creation txhash: {e}")
         return None
 
 
