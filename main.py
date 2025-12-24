@@ -44,11 +44,10 @@ w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
 logger.info("✅ Web3 RPC initialized with middleware cleared (Alchemy-safe)")
 
-# Load ABI Clanker v3.1
 try:
     with open("abi_clanker.json", "r", encoding="utf-8") as f:
         abi_clanker_v31 = json.load(f)
-    contract_clanker_v31 = w3.eth.contract(abi=abi_clanker_v31)
+    contract_clanker_v31 = None
     logger.info("✅ Clanker v3.1 ABI loaded successfully.")
 except Exception as e:
     logger.error(f"❌ Error loading Clanker v3.1 ABI: {e}")
@@ -58,7 +57,7 @@ except Exception as e:
 try:
     with open("abi_clanker_v4.json", "r", encoding="utf-8") as f:
         abi_clanker_v40 = json.load(f)
-    contract_clanker_v40 = w3.eth.contract(abi=abi_clanker_v40)
+    contract_clanker_v40 = None
     HAS_V4 = True
     logger.info("✅ Clanker v4.0 ABI loaded successfully.")
 except Exception as e:
@@ -155,6 +154,10 @@ def get_transaction_data(txhash: str) -> dict:
         else:
             input_hex = raw_input
 
+        # normalize: tránh 0x0x...
+        if isinstance(input_hex, str) and input_hex.startswith("0x0x"):
+            input_hex = "0x" + input_hex[4:]
+
         return {
             "from": tx.get("from") if isinstance(tx, dict) else tx["from"],
             "to": tx.get("to") if isinstance(tx, dict) else tx["to"],
@@ -224,16 +227,27 @@ def _map_v4_to_v31_like(args_dict: dict) -> dict:
     }
     return mapped
 
-def decode_input_with_web3(input_hex: str):
-    # Thử decode bằng v4 trước
-    if HAS_V4:
-        r = _try_decode(contract_clanker_v40, input_hex)
+def decode_input_with_web3(input_hex: str, to_address: str):
+    """
+    Decode input using Clanker factory ABI at correct contract address
+    """
+    try:
+        to_address = Web3.to_checksum_address(to_address)
+    except Exception:
+        return None
+
+    contract_v4 = w3.eth.contract(address=to_address, abi=abi_clanker_v40) if HAS_V4 else None
+    contract_v31 = w3.eth.contract(address=to_address, abi=abi_clanker_v31)
+
+    # Try v4 first
+    if contract_v4:
+        r = _try_decode(contract_v4, input_hex)
         if r and r["func"].fn_name == "deployToken":
             mapped_args = _map_v4_to_v31_like(dict(r["args"]))
             return {"function": "deployToken", "args": mapped_args}
 
-    # Fallback: v3.1
-    r = _try_decode(contract_clanker_v31, input_hex)
+    # Fallback v3.1
+    r = _try_decode(contract_v31, input_hex)
     if r and r["func"].fn_name == "deployToken":
         return {"function": r["func"].fn_name, "args": dict(r["args"])}
 
@@ -326,7 +340,7 @@ def handle_message(update: Update, context: CallbackContext):
 
         logger.info(f"🔍 Input data raw (first 20 chars): {input_data_raw[:20]}... (length: {len(input_data_raw)})")
 
-        decoded = decode_input_with_web3(input_data_raw)
+        decoded = decode_input_with_web3(input_data_raw, tx_data.get("to"))
         if not decoded or decoded.get("function") != "deployToken":
             update.message.reply_text("Error decoding input data with Clanker ABIs (v4/v3.1).")
             return
