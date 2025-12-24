@@ -417,6 +417,62 @@ def decode_input_with_web3(input_hex: str, to_address: str):
     }
 
 
+# --- Clanker v4 RAW calldata decode (LP-mint aware, no event) ---
+def decode_clanker_v4_raw(input_hex: str):
+    """
+    Decode Clanker v4 LP-mint calldata (RPC-only, BaseScan-style)
+    Không check selector – decode trực tiếp struct
+    """
+    try:
+        if not input_hex or not input_hex.startswith("0x"):
+            return None
+
+        # bỏ 4-byte selector
+        payload = bytes.fromhex(input_hex[10:])
+
+        decoded = abi_decode(
+            [
+                "("
+                "(address,string,string,bytes32,string,string,string,uint256),"  # TokenConfig
+                "(address,address,int24,int24,bytes),"                           # PoolConfig
+                "(address,address[],address[],uint16[],int24[],int24[],uint16[],bytes),"  # LockerConfig
+                "(address,bytes),"                                               # MevModuleConfig
+                "(address,uint256,uint16,bytes)[]"                               # ExtensionConfigs
+                ")"
+            ],
+            payload
+        )
+
+        token_cfg = decoded[0][0]
+        locker_cfg = decoded[0][2]
+
+        creator_reward_recipient = None
+        try:
+            reward_recipients = locker_cfg[2]
+            if reward_recipients:
+                creator_reward_recipient = reward_recipients[0]
+        except Exception:
+            pass
+
+        return {
+            "tokenConfig": {
+                "tokenAdmin": token_cfg[0],
+                "name": token_cfg[1],
+                "symbol": token_cfg[2],
+                "salt": token_cfg[3].hex(),
+                "image": token_cfg[4],
+                "metadata": token_cfg[5],
+                "context": token_cfg[6],
+                "originatingChainId": token_cfg[7],
+            },
+            "creatorRewardRecipient": creator_reward_recipient
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Clanker v4 raw decode failed: {e}")
+        return None
+
+
 def format_metadata(metadata_raw):
     """
     Trả về chuỗi nhiều dòng để đưa vào Telegram Markdown.
@@ -473,6 +529,7 @@ def handle_message(update: Update, context: CallbackContext):
     try:
         msg_text = update.message.text.strip()
         logger.info(f"📨 Received message: {msg_text}")
+        logger.info(f"🧪 [DEBUG] Using Clanker v4 RAW calldata decode (LP-mint aware)")
 
         if not re.match(r"^0x[a-fA-F0-9]{40}$", msg_text):
             logger.warning("⚠️ Message is not a valid contract address.")
@@ -504,20 +561,14 @@ def handle_message(update: Update, context: CallbackContext):
 
         logger.info(f"🔍 Input data raw (first 20 chars): {input_data_raw[:20]}... (length: {len(input_data_raw)})")
 
-        # --- Use event parsing instead of calldata decode ---
-        event_data = parse_token_created_event(txhash, tx_data.get("to"))
-        if not event_data:
-            update.message.reply_text("Error parsing TokenCreated event.")
+        # --- Decode Clanker v4 LP-mint calldata ---
+        decoded = decode_clanker_v4_raw(input_data_raw)
+        if not decoded:
+            update.message.reply_text("Failed to decode Clanker v4 calldata.")
             return
 
-        token_config = {
-            "name": event_data.get("name"),
-            "symbol": event_data.get("symbol"),
-            "image": event_data.get("image"),
-            "metadata": event_data.get("metadata"),
-            "context": event_data.get("context"),
-        }
-        creator_reward_recipient = event_data.get("tokenAdmin")
+        token_config = decoded.get("tokenConfig", {})
+        creator_reward_recipient = decoded.get("creatorRewardRecipient")
 
         name = token_config.get("name")
         symbol = token_config.get("symbol")
