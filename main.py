@@ -106,20 +106,21 @@ def get_creation_txhash(contract_address: str) -> str:
 
         logger.info(f"✅ [RPC] Contract deployed at block {deploy_block}")
 
-        # --- Step 2: scan deploy block for creation tx ---
+        # --- Step 2: scan deploy block for creation tx (CREATE2-safe) ---
         block = w3.eth.get_block(deploy_block, full_transactions=True)
-
-        # block có thể là dict hoặc AttributeDict tùy provider
         transactions = block.get("transactions") if isinstance(block, dict) else block.transactions
 
         for tx in transactions:
             try:
                 tx_hash = tx.get("hash") if isinstance(tx, dict) else tx.hash
-                receipt = w3.eth.get_transaction_receipt(tx_hash)
 
-                if receipt.contractAddress and receipt.contractAddress.lower() == contract_address.lower():
+                # Nếu trước tx này contract chưa tồn tại, sau block này đã tồn tại
+                code_before = w3.eth.get_code(contract_address, deploy_block - 1)
+                code_after  = w3.eth.get_code(contract_address, deploy_block)
+
+                if (not code_before or code_before == b"") and code_after and code_after != b"":
                     txhash = tx_hash.hex() if hasattr(tx_hash, "hex") else tx_hash
-                    logger.info(f"✅ [RPC] Found creation txhash: {txhash}")
+                    logger.info(f"✅ [RPC] Found creation txhash via CREATE2-safe logic: {txhash}")
                     return txhash
             except Exception:
                 continue
